@@ -2,6 +2,8 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import secrets
+import jwt
+import os
 
 db = SQLAlchemy()
 
@@ -44,11 +46,45 @@ class User(db.Model):
         """Check if the provided password matches the user's password"""
         return check_password_hash(self.password_hash, password)
 
+    def generate_jwt_token(self):
+        """Generate a JWT token for the user"""
+        secret_key = os.environ.get('SECRET_KEY', 'giso-invest-auth-secret-key-2024')
+        
+        payload = {
+            'user_id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'exp': datetime.utcnow() + timedelta(days=30),  # Token expires in 30 days
+            'iat': datetime.utcnow(),  # Issued at
+            'sub': str(self.id)  # Subject (user ID)
+        }
+        
+        token = jwt.encode(payload, secret_key, algorithm='HS256')
+        return token
+
     def generate_session_token(self):
-        """Generate a new session token"""
+        """Generate a new session token (legacy support)"""
         self.session_token = secrets.token_urlsafe(32)
         self.token_expires_at = datetime.utcnow() + timedelta(days=30)
         return self.session_token
+
+    @staticmethod
+    def verify_jwt_token(token):
+        """Verify and decode a JWT token"""
+        try:
+            secret_key = os.environ.get('SECRET_KEY', 'giso-invest-auth-secret-key-2024')
+            payload = jwt.decode(token, secret_key, algorithms=['HS256'])
+            
+            user_id = payload.get('user_id')
+            if not user_id:
+                return None
+            
+            user = User.query.get(user_id)
+            return user
+        except jwt.ExpiredSignatureError:
+            return None  # Token has expired
+        except jwt.InvalidTokenError:
+            return None  # Invalid token
 
     def is_session_valid(self):
         """Check if the current session token is valid"""
@@ -108,7 +144,7 @@ class User(db.Model):
 
     @staticmethod
     def find_by_session_token(token):
-        """Find user by session token"""
+        """Find user by session token (legacy support)"""
         return User.query.filter_by(session_token=token).first()
 
     @staticmethod

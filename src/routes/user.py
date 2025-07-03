@@ -17,6 +17,21 @@ def validate_password(password):
         return False, "Password must be at least 6 characters long"
     return True, ""
 
+def get_user_from_token():
+    """Extract user from JWT token in Authorization header"""
+    auth_header = request.headers.get('Authorization')
+    
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return None, {'error': 'No token provided'}, 401
+    
+    token = auth_header.split(' ')[1]
+    user = User.verify_jwt_token(token)
+    
+    if not user:
+        return None, {'error': 'Invalid or expired token'}, 401
+    
+    return user, None, None
+
 @user_bp.route('/auth/register', methods=['POST'])
 @cross_origin()
 def register():
@@ -58,17 +73,19 @@ def register():
         
         # Create new user
         user = User(username=username, email=email, password=password)
-        session_token = user.generate_session_token()
         user.update_last_login()
         
         db.session.add(user)
         db.session.commit()
         
+        # Generate JWT token
+        jwt_token = user.generate_jwt_token()
+        
         return jsonify({
             'success': True,
             'message': 'Account created successfully',
             'user': user.to_dict(),
-            'token': session_token
+            'token': jwt_token
         }), 201
         
     except Exception as e:
@@ -97,17 +114,18 @@ def login():
         if not user or not user.check_password(password):
             return jsonify({'error': 'Invalid username or password'}), 401
         
-        # Generate new session token
-        session_token = user.generate_session_token()
+        # Update last login
         user.update_last_login()
-        
         db.session.commit()
+        
+        # Generate JWT token
+        jwt_token = user.generate_jwt_token()
         
         return jsonify({
             'success': True,
             'message': 'Login successful',
             'user': user.to_dict(),
-            'token': session_token
+            'token': jwt_token
         }), 200
         
     except Exception as e:
@@ -119,17 +137,14 @@ def login():
 def logout():
     """Logout user"""
     try:
-        auth_header = request.headers.get('Authorization')
+        # For JWT tokens, we don't need to invalidate on server side
+        # The client will simply discard the token
+        # But we can still validate the token to ensure it's a valid logout request
         
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'No token provided'}), 401
-        
-        token = auth_header.split(' ')[1]
-        user = User.find_by_session_token(token)
-        
-        if user:
-            user.invalidate_session()
-            db.session.commit()
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            # Even if token is invalid, we consider logout successful
+            pass
         
         return jsonify({
             'success': True,
@@ -137,7 +152,6 @@ def logout():
         }), 200
         
     except Exception as e:
-        db.session.rollback()
         return jsonify({'error': f'Logout failed: {str(e)}'}), 500
 
 @user_bp.route('/auth/validate', methods=['GET'])
@@ -145,21 +159,9 @@ def logout():
 def validate_session():
     """Validate user session"""
     try:
-        auth_header = request.headers.get('Authorization')
-        
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({'valid': False, 'error': 'No token provided'}), 401
-        
-        token = auth_header.split(' ')[1]
-        user = User.find_by_session_token(token)
-        
-        if not user:
-            return jsonify({'valid': False, 'error': 'Invalid token'}), 401
-        
-        if not user.is_session_valid():
-            user.invalidate_session()
-            db.session.commit()
-            return jsonify({'valid': False, 'error': 'Token expired'}), 401
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
         
         return jsonify({
             'valid': True,
@@ -174,19 +176,12 @@ def validate_session():
 def refresh_token():
     """Refresh user session token"""
     try:
-        auth_header = request.headers.get('Authorization')
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
         
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'No token provided'}), 401
-        
-        token = auth_header.split(' ')[1]
-        user = User.find_by_session_token(token)
-        
-        if not user:
-            return jsonify({'error': 'Invalid token'}), 401
-        
-        # Generate new token
-        new_token = user.generate_session_token()
+        # Generate new JWT token
+        new_token = user.generate_jwt_token()
         user.update_last_login()
         
         db.session.commit()
@@ -206,16 +201,9 @@ def refresh_token():
 def get_profile():
     """Get current user profile"""
     try:
-        auth_header = request.headers.get('Authorization')
-        
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'No token provided'}), 401
-        
-        token = auth_header.split(' ')[1]
-        user = User.find_by_session_token(token)
-        
-        if not user or not user.is_session_valid():
-            return jsonify({'error': 'Invalid or expired token'}), 401
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
         
         return jsonify({
             'success': True,
@@ -230,16 +218,9 @@ def get_profile():
 def update_profile():
     """Update current user profile"""
     try:
-        auth_header = request.headers.get('Authorization')
-        
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'No token provided'}), 401
-        
-        token = auth_header.split(' ')[1]
-        user = User.find_by_session_token(token)
-        
-        if not user or not user.is_session_valid():
-            return jsonify({'error': 'Invalid or expired token'}), 401
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
         
         data = request.get_json()
         if not data:
