@@ -209,3 +209,83 @@ def get_billing_history():
     except Exception as e:
         return jsonify({'error': f'Failed to get billing history: {str(e)}'}), 500
 
+
+
+@subscription_bp.route('/create-checkout-session', methods=['POST'])
+@cross_origin()
+def create_checkout_session():
+    """Create Stripe checkout session for subscription"""
+    try:
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
+
+        data = request.get_json()
+        price_id = data.get('priceId')
+        plan_type = data.get('planType')
+        
+        if not price_id or not plan_type:
+            return jsonify({'error': 'Price ID and plan type are required'}), 400
+        
+        # Here you would integrate with Stripe to create checkout session
+        # For now, we'll simulate successful checkout session creation
+        
+        checkout_session_id = f"cs_{uuid.uuid4().hex[:24]}"
+        checkout_url = f"https://checkout.stripe.com/pay/{checkout_session_id}"
+        
+        return jsonify({
+            'success': True,
+            'checkout_url': checkout_url,
+            'session_id': checkout_session_id
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to create checkout session: {str(e)}'}), 500
+
+@subscription_bp.route('/verify-payment', methods=['POST'])
+@cross_origin()
+def verify_payment():
+    """Verify payment after Stripe checkout completion"""
+    try:
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
+
+        data = request.get_json()
+        session_id = data.get('session_id')
+        
+        if not session_id:
+            return jsonify({'error': 'Session ID is required'}), 400
+        
+        # Here you would verify the payment with Stripe
+        # For now, we'll simulate successful payment verification
+        
+        # Update user subscription (assuming professional plan for demo)
+        user.subscription_plan = 'professional'
+        user.subscription_status = 'active'
+        user.subscription_start_date = datetime.datetime.utcnow()
+        user.subscription_end_date = datetime.datetime.utcnow() + datetime.timedelta(days=30)
+        user.stripe_customer_id = f"cus_{uuid.uuid4().hex[:24]}"
+        user.stripe_subscription_id = f"sub_{uuid.uuid4().hex[:24]}"
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'subscription': {
+                'plan': user.subscription_plan,
+                'status': user.subscription_status,
+                'start_date': user.subscription_start_date.isoformat(),
+                'end_date': user.subscription_end_date.isoformat()
+            },
+            'user': {
+                'id': user.id,
+                'subscription_plan': user.subscription_plan,
+                'subscription_status': user.subscription_status
+            }
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to verify payment: {str(e)}'}), 500
+
