@@ -7,6 +7,7 @@ from flask import Flask, send_from_directory
 from flask_cors import CORS
 from src.models.user import db
 from src.routes.user import user_bp
+from src.routes.subscription import subscription_bp
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
 
@@ -17,6 +18,7 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'giso-invest-auth-secret
 CORS(app, origins="*", allow_headers=["Content-Type", "Authorization"])
 
 app.register_blueprint(user_bp, url_prefix='/api')
+app.register_blueprint(subscription_bp, url_prefix='/api')
 
 # Database configuration - use environment variable for production
 database_url = os.environ.get('DATABASE_URL')
