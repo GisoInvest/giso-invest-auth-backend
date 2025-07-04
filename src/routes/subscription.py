@@ -1,293 +1,211 @@
 from flask import Blueprint, request, jsonify
-from src.models.user import User
-from src.database import db
-from src.utils.auth import token_required
+from flask_cors import cross_origin
+from src.models.user import User, db
 import datetime
 import uuid
 
 subscription_bp = Blueprint('subscription', __name__)
 
+def get_user_from_token():
+    """Extract user from JWT token in Authorization header"""
+    auth_header = request.headers.get('Authorization')
+    
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return None, {'error': 'No token provided'}, 401
+    
+    token = auth_header.split(' ')[1]
+    user = User.verify_jwt_token(token)
+    
+    if not user:
+        return None, {'error': 'Invalid or expired token'}, 401
+    
+    return user, None, None
+
 @subscription_bp.route('/subscription/status', methods=['GET'])
-@token_required
-def get_subscription_status(current_user):
+@cross_origin()
+def get_subscription_status():
     """Get current user's subscription status"""
     try:
-        user = User.query.get(current_user.id)
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
 
         # Calculate trial status
         trial_status = user.calculate_trial_status()
         
-        subscription_data = {
+        return jsonify({
             'user_id': user.id,
-            'subscription_status': user.subscription_status,
             'subscription_plan': user.subscription_plan,
-            'trial_active': user.trial_active,
+            'subscription_status': user.subscription_status,
             'trial_start_date': user.trial_start_date.isoformat() if user.trial_start_date else None,
             'trial_end_date': user.trial_end_date.isoformat() if user.trial_end_date else None,
             'subscription_start_date': user.subscription_start_date.isoformat() if user.subscription_start_date else None,
-            'next_billing_date': user.next_billing_date.isoformat() if user.next_billing_date else None,
+            'subscription_end_date': user.subscription_end_date.isoformat() if user.subscription_end_date else None,
             'trial_status': trial_status,
-            'can_access_app': trial_status['can_access'],
-            'payment_required': trial_status['payment_required']
-        }
-        
-        return jsonify(subscription_data), 200
+            'is_trial_active': trial_status['is_active'],
+            'is_trial_expired': trial_status['is_expired'],
+            'days_remaining': trial_status['days_remaining']
+        }), 200
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Failed to get subscription status: {str(e)}'}), 500
 
 @subscription_bp.route('/subscription/create', methods=['POST'])
-@token_required
-def create_subscription(current_user):
+@cross_origin()
+def create_subscription():
     """Create a new subscription for the user"""
     try:
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
+
         data = request.get_json()
+        plan = data.get('plan')
+        payment_method_id = data.get('payment_method_id')
         
-        # Validate required fields
-        required_fields = ['plan_id', 'payment_intent_id', 'customer_id']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
+        if not plan or not payment_method_id:
+            return jsonify({'error': 'Plan and payment method are required'}), 400
         
-        user = User.query.get(current_user.id)
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
+        # Validate plan
+        valid_plans = ['starter', 'professional', 'enterprise']
+        if plan not in valid_plans:
+            return jsonify({'error': 'Invalid plan selected'}), 400
+        
+        # Here you would integrate with Stripe to process payment
+        # For now, we'll simulate successful payment
         
         # Update user subscription
+        user.subscription_plan = plan
         user.subscription_status = 'active'
-        user.subscription_plan = data['plan_id']
-        user.plan = data['plan_id']
-        user.trial_active = False
-        user.payment_required = False
         user.subscription_start_date = datetime.datetime.utcnow()
-        user.last_payment_date = datetime.datetime.utcnow()
-        user.next_billing_date = datetime.datetime.utcnow() + datetime.timedelta(days=30)
-        user.stripe_customer_id = data['customer_id']
-        user.stripe_payment_intent_id = data['payment_intent_id']
+        user.subscription_end_date = datetime.datetime.utcnow() + datetime.timedelta(days=30)
+        user.stripe_customer_id = f"cus_{uuid.uuid4().hex[:24]}"  # Simulate Stripe customer ID
+        user.stripe_subscription_id = f"sub_{uuid.uuid4().hex[:24]}"  # Simulate Stripe subscription ID
         
-        # Save to database
         db.session.commit()
         
         return jsonify({
             'message': 'Subscription created successfully',
-            'subscription_status': user.subscription_status,
-            'subscription_plan': user.subscription_plan,
-            'next_billing_date': user.next_billing_date.isoformat()
+            'subscription': {
+                'plan': user.subscription_plan,
+                'status': user.subscription_status,
+                'start_date': user.subscription_start_date.isoformat(),
+                'end_date': user.subscription_end_date.isoformat()
+            }
         }), 200
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@subscription_bp.route('/subscription/update', methods=['PUT'])
-@token_required
-def update_subscription(current_user):
-    """Update user's subscription plan"""
-    try:
-        data = request.get_json()
-        
-        if 'plan_id' not in data:
-            return jsonify({'error': 'Missing plan_id'}), 400
-        
-        user = User.query.get(current_user.id)
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        # Update subscription plan
-        old_plan = user.subscription_plan
-        user.subscription_plan = data['plan_id']
-        user.plan = data['plan_id']
-        
-        # If upgrading, update billing date
-        if data.get('immediate_billing', False):
-            user.last_payment_date = datetime.datetime.utcnow()
-            user.next_billing_date = datetime.datetime.utcnow() + datetime.timedelta(days=30)
-        
-        db.session.commit()
-        
-        return jsonify({
-            'message': f'Subscription updated from {old_plan} to {data["plan_id"]}',
-            'subscription_plan': user.subscription_plan,
-            'next_billing_date': user.next_billing_date.isoformat() if user.next_billing_date else None
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Failed to create subscription: {str(e)}'}), 500
 
 @subscription_bp.route('/subscription/cancel', methods=['POST'])
-@token_required
-def cancel_subscription(current_user):
+@cross_origin()
+def cancel_subscription():
     """Cancel user's subscription"""
     try:
-        user = User.query.get(current_user.id)
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
+
+        if user.subscription_status != 'active':
+            return jsonify({'error': 'No active subscription to cancel'}), 400
         
-        # Update subscription status
+        # Here you would integrate with Stripe to cancel subscription
+        
+        # Update user subscription status
         user.subscription_status = 'cancelled'
-        user.subscription_plan = 'free'
-        user.plan = 'free'
-        user.payment_required = False
-        user.trial_active = False
+        user.subscription_end_date = datetime.datetime.utcnow()
         
         db.session.commit()
         
         return jsonify({
             'message': 'Subscription cancelled successfully',
-            'subscription_status': user.subscription_status,
-            'subscription_plan': user.subscription_plan
+            'subscription': {
+                'plan': user.subscription_plan,
+                'status': user.subscription_status,
+                'end_date': user.subscription_end_date.isoformat()
+            }
         }), 200
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Failed to cancel subscription: {str(e)}'}), 500
 
-@subscription_bp.route('/subscription/reactivate', methods=['POST'])
-@token_required
-def reactivate_subscription(current_user):
-    """Reactivate a cancelled subscription"""
+@subscription_bp.route('/subscription/upgrade', methods=['POST'])
+@cross_origin()
+def upgrade_subscription():
+    """Upgrade user's subscription plan"""
     try:
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
+
         data = request.get_json()
+        new_plan = data.get('plan')
         
-        user = User.query.get(current_user.id)
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
+        if not new_plan:
+            return jsonify({'error': 'New plan is required'}), 400
         
-        if user.subscription_status != 'cancelled':
-            return jsonify({'error': 'Subscription is not cancelled'}), 400
+        # Validate plan
+        valid_plans = ['starter', 'professional', 'enterprise']
+        if new_plan not in valid_plans:
+            return jsonify({'error': 'Invalid plan selected'}), 400
         
-        # Reactivate subscription
-        user.subscription_status = 'active'
-        user.subscription_plan = data.get('plan_id', 'professional')
-        user.plan = user.subscription_plan
-        user.subscription_start_date = datetime.datetime.utcnow()
-        user.last_payment_date = datetime.datetime.utcnow()
-        user.next_billing_date = datetime.datetime.utcnow() + datetime.timedelta(days=30)
+        # Check if it's actually an upgrade
+        plan_hierarchy = {'starter': 1, 'professional': 2, 'enterprise': 3}
+        current_level = plan_hierarchy.get(user.subscription_plan, 0)
+        new_level = plan_hierarchy.get(new_plan, 0)
+        
+        if new_level <= current_level:
+            return jsonify({'error': 'Can only upgrade to a higher plan'}), 400
+        
+        # Here you would integrate with Stripe to update subscription
+        
+        # Update user subscription
+        user.subscription_plan = new_plan
         
         db.session.commit()
         
         return jsonify({
-            'message': 'Subscription reactivated successfully',
-            'subscription_status': user.subscription_status,
-            'subscription_plan': user.subscription_plan,
-            'next_billing_date': user.next_billing_date.isoformat()
+            'message': 'Subscription upgraded successfully',
+            'subscription': {
+                'plan': user.subscription_plan,
+                'status': user.subscription_status,
+                'start_date': user.subscription_start_date.isoformat() if user.subscription_start_date else None,
+                'end_date': user.subscription_end_date.isoformat() if user.subscription_end_date else None
+            }
         }), 200
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Failed to upgrade subscription: {str(e)}'}), 500
 
 @subscription_bp.route('/subscription/billing-history', methods=['GET'])
-@token_required
-def get_billing_history(current_user):
+@cross_origin()
+def get_billing_history():
     """Get user's billing history"""
     try:
-        user = User.query.get(current_user.id)
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
+        user, error_response, status_code = get_user_from_token()
+        if error_response:
+            return jsonify(error_response), status_code
+
+        # Here you would integrate with Stripe to get billing history
+        # For now, return mock data
         
-        # For now, return basic billing info
-        # In a real app, this would query a billing/payments table
-        billing_history = []
-        
-        if user.last_payment_date:
-            billing_history.append({
-                'date': user.last_payment_date.isoformat(),
-                'amount': get_plan_price(user.subscription_plan),
-                'plan': user.subscription_plan,
+        billing_history = [
+            {
+                'id': 'inv_' + uuid.uuid4().hex[:16],
+                'date': user.subscription_start_date.isoformat() if user.subscription_start_date else None,
+                'amount': 99.00 if user.subscription_plan == 'professional' else 49.00,
                 'status': 'paid',
-                'payment_method': 'card'
-            })
+                'plan': user.subscription_plan
+            }
+        ] if user.subscription_plan and user.subscription_plan != 'free' else []
         
         return jsonify({
-            'billing_history': billing_history,
-            'next_billing_date': user.next_billing_date.isoformat() if user.next_billing_date else None,
-            'current_plan': user.subscription_plan
+            'billing_history': billing_history
         }), 200
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-def get_plan_price(plan_id):
-    """Get the price for a given plan"""
-    plan_prices = {
-        'free': 0,
-        'starter': 49,
-        'professional': 99,
-        'enterprise': 199
-    }
-    return plan_prices.get(plan_id, 0)
-
-@subscription_bp.route('/subscription/plans', methods=['GET'])
-def get_available_plans():
-    """Get all available subscription plans"""
-    try:
-        plans = [
-            {
-                'id': 'free',
-                'name': 'Free',
-                'price': 0,
-                'currency': 'GBP',
-                'interval': 'forever',
-                'features': [
-                    '1 Investment Strategy',
-                    'Basic property analysis',
-                    '5 property analyses per month',
-                    'Email support'
-                ]
-            },
-            {
-                'id': 'starter',
-                'name': 'Starter',
-                'price': 49,
-                'currency': 'GBP',
-                'interval': 'month',
-                'features': [
-                    '5 Investment Strategies',
-                    'Advanced property analysis',
-                    'Basic deal packaging',
-                    '50 property analyses per month',
-                    'Priority email support'
-                ]
-            },
-            {
-                'id': 'professional',
-                'name': 'Professional',
-                'price': 99,
-                'currency': 'GBP',
-                'interval': 'month',
-                'features': [
-                    'All 10 Investment Strategies',
-                    'Comprehensive property analysis',
-                    'Advanced deal packaging',
-                    'Unlimited property analyses',
-                    'Priority support (24/7)',
-                    'Portfolio tracking'
-                ],
-                'popular': True
-            },
-            {
-                'id': 'enterprise',
-                'name': 'Enterprise',
-                'price': 199,
-                'currency': 'GBP',
-                'interval': 'month',
-                'features': [
-                    'All Professional features',
-                    'Team collaboration tools',
-                    'Custom branding',
-                    'Dedicated account manager',
-                    'API access',
-                    'Advanced analytics'
-                ]
-            }
-        ]
-        
-        return jsonify({'plans': plans}), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Failed to get billing history: {str(e)}'}), 500
 
