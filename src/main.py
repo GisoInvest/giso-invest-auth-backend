@@ -8,6 +8,10 @@ from flask_cors import CORS
 from src.models.user import db
 from src.routes.user import user_bp
 from src.routes.subscription import subscription_bp
+from src.routes.portfolio import portfolio_bp
+from src.routes.property import property_bp
+from src.routes.report import report_bp
+from src.routes.data import data_bp
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
 
@@ -19,6 +23,10 @@ CORS(app, origins="*", allow_headers=["Content-Type", "Authorization"])
 
 app.register_blueprint(user_bp, url_prefix='/api')
 app.register_blueprint(subscription_bp, url_prefix='/api')
+app.register_blueprint(portfolio_bp, url_prefix='/api')
+app.register_blueprint(property_bp, url_prefix='/api')
+app.register_blueprint(report_bp, url_prefix='/api')
+app.register_blueprint(data_bp, url_prefix='/api')
 
 # Database configuration - use environment variable for production
 database_url = os.environ.get('DATABASE_URL')
