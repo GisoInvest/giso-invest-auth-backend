@@ -13,7 +13,7 @@ from src.routes.property import property_bp
 from src.routes.report import report_bp
 from src.routes.data import data_bp
 
-app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
+app = Flask(__name__)
 
 # Use environment variable for secret key in production
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'giso-invest-auth-secret-key-2024')
@@ -44,22 +44,10 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve(path):
-    """Serve static files or index.html for SPA routing"""
-    static_folder_path = app.static_folder
-    if static_folder_path is None:
-        return "GISO Invest Authentication Service is running", 200
-
-    if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
-        return send_from_directory(static_folder_path, path)
-    else:
-        index_path = os.path.join(static_folder_path, 'index.html')
-        if os.path.exists(index_path):
-            return send_from_directory(static_folder_path, 'index.html')
-        else:
-            return "GISO Invest Authentication Service is running", 200
+@app.route('/')
+def home():
+    """Home endpoint"""
+    return "GISO Invest Authentication Service is running", 200
 
 @app.route('/health')
 def health_check():
